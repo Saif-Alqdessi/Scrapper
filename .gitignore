@@ -1,0 +1,42 @@
+# ── OS & Editor ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# ── Secrets — NEVER commit these ──────────────────────────────
+.env
+.env.local
+.env.production
+!.env.example
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# ── Node / Next.js ────────────────────────────────────────────
+node_modules/
+.next/
+out/
+.npm
+
+# ── Docker ────────────────────────────────────────────────────
+# (compose volumes live outside the repo — no need to ignore)
+
+# ── Misc ──────────────────────────────────────────────────────
+*.log
+*.tmp
+"graphify-out/" 

@@ -1,0 +1,489 @@
+"""
+app/services/scraper/playwright_scraper.py
+PRIMARY scraper — Headless Chromium / Google Maps.
+
+v4: Arabic locale hardening + NoneType safety.
+    - Browser launched with hl=en param in URL to force English results.
+    - RATING_SELECTORS now includes Arabic نجمة aria-label.
+    - _REVIEW_RE group extraction guarded against both groups being None.
+    - review_count=0 default covers rating-but-no-review cards (e.g. new clinics).
+    - DEBUG_DUMP_FIRST_CARD set to False — DOM dumps are for dev only.
+    - _debug_dumped moved to instance variable so Celery fork-reuse is safe.
+"""
+import asyncio
+import logging
+import re
+from collections.abc import AsyncGenerator
+
+from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+
+from app.schemas.lead import RawLeadData
+
+log = logging.getLogger(__name__)
+
+# ── URL / Browser config ───────────────────────────────────────────────────────
+# Append hl=en to force Google Maps to render in English regardless of
+# the server's system locale (which may resolve to Arabic in Docker).
+_MAPS_URL = "https://www.google.com/maps/search/{q}?hl=en"
+_VIEWPORT  = {"width": 1366, "height": 768}
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+# ── Selector banks (tried in order, first match wins) ─────────────────────────
+# Google A/B tests class names constantly — never rely on a single selector.
+
+NAME_SELECTORS = [
+    "div.fontHeadlineSmall",          # Stable class — most common
+    "h3.fontHeadlineSmall",           # Sometimes h3
+    "div[class*='fontHeadline']",     # Partial class match
+    "span.fontHeadlineSmall",         # Rare variant
+    "div[class*='qBF1Pd']",          # Hashed class (may change)
+    "a[aria-label]",                  # Last resort: accessible label on the link
+]
+
+RATING_SELECTORS = [
+    # English aria-labels
+    "span[aria-label*='stars']",      # "4.5 stars"
+    "span[aria-label*='star']",       # "1 star"
+    # Arabic aria-labels — Google renders these even with hl=en on some DCs
+    "span[aria-label*='\u0646\u062c\u0645\u0629']",   # نجمة (star, singular)
+    "span[aria-label*='\u0646\u062c\u0648\u0645']",   # نجوم (stars, plural)
+    # Role-based fallbacks
+    "span[role='img'][aria-label]",
+    "span.fontBodyMedium > span[aria-label]",
+    "div[class*='MW4etd']",          # Hashed wrapper seen in 2024
+]
+
+REVIEW_SELECTORS = [
+    # English aria-labels
+    "span[aria-label*='reviews']",
+    "span[aria-label*='review']",
+    "button[aria-label*='review']",
+    # Arabic aria-labels
+    "span[aria-label*='\u062a\u0642\u064a\u064a\u0645']",           # تقييم (ratings)
+    "span[aria-label*='\u0645\u0631\u0627\u062c\u0639\u0629']",      # مراجعة (review)
+    "span[aria-label*='\u0645\u0646 \u0627\u0644\u0645\u0631\u0627\u062c\u0639\u0627\u062a']",  # من المراجعات
+    # Positional: span immediately after the stars span (EN and AR variants)
+    "span[aria-label*='stars'] + span",
+    "span[aria-label*='star'] + span",
+    "span[aria-label*='\u0646\u062c\u0645\u0629'] + span",
+    "span[aria-label*='\u0646\u062c\u0648\u0645'] + span",
+    # Parenthesized count in visible text
+    "div.fontBodyMedium > span > span:nth-child(2)",
+    "span.fontBodyMedium > span:nth-child(2)",
+]
+
+PHONE_SELECTORS = [
+    "span[aria-label^='Phone']",              # aria-label="Phone: +962..."
+    "button[data-item-id^='phone']",          # data attribute
+    "span[data-item-id^='phone']",
+    "[aria-label*='phone' i]",               # case-insensitive
+    "[aria-label*='mobile' i]",
+]
+
+ADDRESS_SELECTORS = [
+    "button[data-item-id^='address'] div.fontBodyMedium",
+    "span[aria-label^='Address']",
+    "div[class*='W4Efsd'] > div > span:last-child",
+    "div.fontBodyMedium span:last-child",
+]
+
+WEBSITE_SELECTORS = [
+    "a[data-item-id^='authority']",
+    "button[data-item-id^='authority']",
+    "a[aria-label*='website' i]",
+    "a[aria-label*='Website' i]",
+]
+
+MAPS_LINK_SELECTORS = [
+    "a[href*='maps.google.com']",
+    "a[href*='/maps/place/']",
+    "a[href*='google.com/maps']",
+]
+
+# ── Regex patterns ─────────────────────────────────────────────────────────────
+# Handles EN ("4.5 stars") and AR ("4.5 نجمة" / "4.5 نجوم")
+_RATING_RE = re.compile(
+    r"(\d+[.,]\d+)\s*(?:stars?|\u0646\u062c\u0645\u0629|\u0646\u062c\u0648\u0645)",
+    re.I,
+)
+# Handles: "127 reviews", "127 تقييم", "127 مراجعة", "127 من المراجعات", "(127)"
+# Groups: group(1) = plain number with word, group(2) = parenthesized number
+_REVIEW_RE = re.compile(
+    r"([\d,]+)\s*(?:reviews?|\u062a\u0642\u064a\u064a\u0645|\u0645\u0631\u0627\u062c\u0639\u0629|\u0645\u0646\s\u0627\u0644\u0645\u0631\u0627\u062c\u0639\u0627\u062a)"
+    r"|\(([\d,]+)\)",
+    re.I,
+)
+_PHONE_RE = re.compile(r"[\+\d][\d\s\-\(\)\.]{6,20}\d")
+
+# ── DOM debug flag ─────────────────────────────────────────────────────────────
+# Keep False in production — dumps are very verbose and slow down parsing.
+DEBUG_DUMP_FIRST_CARD = False
+
+
+def _extract_review_count(m: re.Match) -> int | None:
+    """
+    Safely extract review count from a _REVIEW_RE match.
+
+    group(1) = "127" from "127 reviews"
+    group(2) = "127" from "(127)"
+
+    Either or both groups may be None — guard explicitly.
+    """
+    g1 = m.group(1)
+    g2 = m.group(2)
+    raw = g1 if g1 is not None else g2
+    if raw is None:
+        return None
+    try:
+        return int(raw.replace(",", ""))
+    except (ValueError, AttributeError):
+        return None
+
+
+class PlaywrightMapsScraper:
+    """
+    Primary zero-cost scraper. Yields RawLeadData as an async generator.
+    """
+
+    def __init__(self, headless: bool = True, debug: bool = False) -> None:
+        self._headless     = headless
+        self._debug        = debug or DEBUG_DUMP_FIRST_CARD
+        self._debug_dumped = False   # Per-instance — safe across Celery forks
+
+    async def search_businesses(
+        self,
+        niche: str,
+        location: str,
+        scroll_rounds: int = 8,
+    ) -> AsyncGenerator[RawLeadData, None]:
+        query   = f"{niche} near {location}"
+        encoded = query.replace(" ", "+")
+        url     = _MAPS_URL.format(q=encoded)
+
+        log.info("Playwright scraper starting — query=%r", query)
+
+        async with async_playwright() as pw:
+            browser: Browser | None        = None
+            context: BrowserContext | None = None
+            try:
+                browser = await pw.chromium.launch(headless=self._headless)
+                context = await browser.new_context(
+                    viewport=_VIEWPORT,
+                    user_agent=_UA,
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                )
+                await context.route("**/*", _block_resources)
+                page = await context.new_page()
+
+                log.info("Navigating to Google Maps…")
+                await page.goto(url, timeout=45_000, wait_until="domcontentloaded")
+
+                # Dismiss cookie consent banner if present
+                try:
+                    await page.click(
+                        "button[aria-label*='Accept'], button[aria-label*='Agree'],"
+                        "form[action*='consent'] button",
+                        timeout=4_000,
+                    )
+                    log.debug("Cookie banner dismissed")
+                except Exception:
+                    pass
+
+                # Wait for the results feed
+                try:
+                    await page.wait_for_selector('[role="feed"]', timeout=20_000)
+                    log.info("Results feed detected ✅")
+                except Exception:
+                    log.warning("Results feed NOT found — Google may have blocked or changed layout")
+                    title = await page.title()
+                    log.warning("Page title: %r", title)
+                    return
+
+                await _scroll_feed(page, scroll_rounds)
+
+                cards = await page.locator('[role="feed"] > div[jsaction]').all()
+                if not cards:
+                    cards = await page.locator('[role="feed"] > div').all()
+
+                log.info("Cards found: %d", len(cards))
+
+                # Collect all leads then deduplicate (skeleton → full card)
+                parsed_leads: list = []
+                total_cards   = len(cards)
+                rejected      = 0
+
+                for idx, card in enumerate(cards):
+                    # ── Heartbeat every 10 cards so the worker log stays alive ──
+                    if idx > 0 and idx % 10 == 0:
+                        log.info(
+                            "Scraping progress — %d/%d cards parsed | %d leads collected so far",
+                            idx, total_cards, len(parsed_leads),
+                        )
+
+                    lead = await _parse_card(card, idx, niche, location)
+                    if lead:
+                        if self._debug and not self._debug_dumped:
+                            try:
+                                html = await card.inner_html(timeout=3_000)
+                                log.info(
+                                    "\n%s\n  DOM DEBUG — Card #%d innerHTML\n%s\n%s",
+                                    "\u2500" * 60, idx, html, "\u2500" * 60,
+                                )
+                                self._debug_dumped = True
+                            except Exception as exc:
+                                log.warning("Could not dump card HTML: %s", exc)
+                        parsed_leads.append(lead)
+                    else:
+                        rejected += 1
+                        log.debug("Card #%d: no usable data — skipped", idx)
+
+                log.info(
+                    "Card parsing complete — %d accepted / %d rejected out of %d total",
+                    len(parsed_leads), rejected, total_cards,
+                )
+
+                # Keep last occurrence of each name (most complete DOM)
+                deduped: dict = {}
+                for lead in parsed_leads:
+                    key = lead.business_name.strip().lower()
+                    if key in deduped:
+                        log.debug(
+                            "Dedup: replacing earlier skeleton for %r "
+                            "(review_count %s → %s)",
+                            lead.business_name,
+                            deduped[key].review_count,
+                            lead.review_count,
+                        )
+                    deduped[key] = lead
+
+                dupes = len(parsed_leads) - len(deduped)
+                if dupes:
+                    log.info("Deduplication removed %d duplicate card(s)", dupes)
+
+                yielded = 0
+                for lead in deduped.values():
+                    yielded += 1
+                    yield lead
+
+                log.info(
+                    "Scraper complete — %d unique leads from %d raw cards (%d dupes removed)",
+                    yielded, len(cards), dupes,
+                )
+
+            except Exception as exc:
+                log.error("Playwright fatal error: %s", exc, exc_info=True)
+            finally:
+                if context:
+                    await context.close()
+                if browser:
+                    await browser.close()
+
+
+# ── Field extraction helpers ───────────────────────────────────────────────────
+
+async def _try_selectors_text(card, selectors: list[str], timeout: int = 400) -> str | None:
+    """Try each selector in order; return stripped text of first match."""
+    for sel in selectors:
+        try:
+            el   = card.locator(sel).first
+            text = await el.text_content(timeout=timeout)
+            if text and text.strip():
+                return text.strip()
+        except Exception:
+            continue
+    return None
+
+
+async def _try_selectors_attr(
+    card, selectors: list[str], attr: str, timeout: int = 400
+) -> str | None:
+    """Try each selector; return the specified attribute of first match."""
+    for sel in selectors:
+        try:
+            el  = card.locator(sel).first
+            val = await el.get_attribute(attr, timeout=timeout)
+            if val and val.strip():
+                return val.strip()
+        except Exception:
+            continue
+    return None
+
+
+async def _parse_card(
+    card,
+    idx: int,
+    niche: str,
+    location: str,
+) -> RawLeadData | None:
+    """
+    Extract all fields from a single Google Maps result card.
+    Each field is independently wrapped — one failure never kills the rest.
+    """
+
+    # ── Business Name (required) ──────────────────────────────────────────────
+    name: str | None = None
+
+    name = await _try_selectors_text(card, NAME_SELECTORS)
+
+    if not name:
+        name = await _try_selectors_attr(card, ["a[href*='/maps/place/']"], "aria-label")
+
+    if not name:
+        log.debug("Card #%d: no name found — skipping", idx)
+        return None
+
+    # ── Rating ────────────────────────────────────────────────────────────────
+    rating: float | None = None
+
+    # Try aria-label first (works for EN "4.5 stars" and AR "4.5 نجمة")
+    raw_rating = await _try_selectors_attr(card, RATING_SELECTORS, "aria-label")
+    if raw_rating:
+        m = _RATING_RE.search(raw_rating)
+        if m:
+            try:
+                rating = float(m.group(1).replace(",", "."))
+            except (ValueError, AttributeError):
+                pass
+
+    # Fallback: visible text content ("4.5" as rendered number)
+    if rating is None:
+        raw_text = await _try_selectors_text(card, RATING_SELECTORS)
+        if raw_text:
+            m = re.search(r"\d+[.,]\d+", raw_text)
+            if m:
+                try:
+                    rating = float(m.group(0).replace(",", "."))
+                except ValueError:
+                    pass
+
+    # ── Review Count ──────────────────────────────────────────────────────────
+    review_count: int | None = None
+
+    # Strategy A: aria-label attribute
+    raw_reviews = await _try_selectors_attr(card, REVIEW_SELECTORS, "aria-label")
+    if raw_reviews:
+        m = _REVIEW_RE.search(raw_reviews)
+        if m:
+            review_count = _extract_review_count(m)
+
+    # Strategy B: visible text content — "(127)" or "127"
+    if review_count is None:
+        raw_text = await _try_selectors_text(card, REVIEW_SELECTORS)
+        if raw_text:
+            m = _REVIEW_RE.search(raw_text)
+            if m:
+                review_count = _extract_review_count(m)
+
+    # Strategy C: scan entire card text for parenthesized number after rating.
+    # Google renders: "4.8  (127)" or "4.8\n(127)" as plain visible text.
+    if review_count is None:
+        try:
+            all_text = await card.text_content(timeout=800) or ""
+            m = re.search(r"\d+[.,]\d+[^(]{0,30}\(([\d,]+)\)", all_text)
+            if m:
+                review_count = int(m.group(1).replace(",", ""))
+        except Exception:
+            pass
+
+    # Graceful default: businesses with a rating but no visible review count
+    # (new clinics, Google rendering quirk) → treat as 0 reviews so the
+    # filter engine produces a clean "0 reviews < threshold" rejection
+    # rather than a NoneType exception.
+    if review_count is None:
+        review_count = 0
+
+    # ── Phone ─────────────────────────────────────────────────────────────────
+    phone: str | None = None
+
+    raw_phone = await _try_selectors_attr(card, PHONE_SELECTORS, "aria-label")
+    if raw_phone:
+        raw_phone = re.sub(r"^[Pp]hone[:\s]+", "", raw_phone).strip()
+        if _PHONE_RE.match(raw_phone):
+            phone = raw_phone
+
+    if not phone:
+        try:
+            all_text = await card.text_content(timeout=800) or ""
+            m = _PHONE_RE.search(all_text)
+            if m:
+                phone = m.group(0).strip()
+        except Exception:
+            pass
+
+    # ── Website presence ──────────────────────────────────────────────────────
+    has_website  = False
+    website_url: str | None = None
+
+    href = await _try_selectors_attr(card, WEBSITE_SELECTORS, "href")
+    if href and href.startswith("http"):
+        has_website = True
+        website_url = href
+
+    # ── Maps URL ──────────────────────────────────────────────────────────────
+    maps_url: str | None = await _try_selectors_attr(card, MAPS_LINK_SELECTORS, "href")
+
+    # ── Address ───────────────────────────────────────────────────────────────
+    address: str | None = await _try_selectors_text(card, ADDRESS_SELECTORS)
+
+    log.info(
+        "Card #%d ✓ | %r | rating=%s  reviews=%s  phone=%s  website=%s",
+        idx, name, rating, review_count,
+        phone or "—",
+        "yes" if has_website else "no",
+    )
+
+    try:
+        return RawLeadData(
+            business_name   = name,
+            google_place_id = None,
+            niche           = niche,
+            location        = location,
+            address         = address,
+            phone           = phone,
+            google_rating   = rating,
+            review_count    = review_count,
+            has_website     = has_website,
+            website_url     = website_url,
+            maps_url        = maps_url,
+            top_reviews     = [],
+            photo_reference = None,
+            scraped_from    = "playwright",
+        )
+    except Exception as exc:
+        log.warning("RawLeadData validation failed for %r: %s", name, exc)
+        return None
+
+
+# ── Browser utilities ──────────────────────────────────────────────────────────
+
+async def _block_resources(route, request) -> None:
+    """Block images, fonts, media — keeps page loads fast in headless mode."""
+    if request.resource_type in ("image", "media", "font", "stylesheet"):
+        await route.abort()
+    else:
+        await route.continue_()
+
+
+async def _scroll_feed(page: Page, rounds: int) -> None:
+    """
+    Simulate human scrolling of the results panel.
+    Each round scrolls ~1200px and waits 1.5s for lazy-loading.
+    """
+    feed = page.locator('[role="feed"]')
+    prev_count = 0
+    for i in range(rounds):
+        try:
+            await feed.evaluate("el => el.scrollTop += 1200")
+            await asyncio.sleep(1.5)
+            current = await page.locator('[role="feed"] > div').count()
+            if current == prev_count and i > 1:
+                log.debug("Feed stopped loading new cards at round %d — stopping early", i + 1)
+                break
+            prev_count = current
+        except Exception:
+            break

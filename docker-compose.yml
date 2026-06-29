@@ -1,0 +1,161 @@
+# ============================================================
+#  LeadForge — Full-Stack Docker Compose
+#  Services: nginx · api · worker · frontend · postgres · redis
+#
+#  Local dev:  docker compose up
+#  Production: docker compose -f docker-compose.yml up -d
+# ============================================================
+
+services:
+
+  # ── Reverse Proxy ─────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot_certs:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+    networks:
+      - leadforge_net
+
+  # ── FastAPI Backend ───────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: ./backend/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./backend:/app          # Hot-reload in dev; remove for production
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+    networks:
+      - leadforge_net
+
+  # ── Celery Worker ─────────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: ./backend/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./backend:/app          # Hot-reload in dev; remove for production
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    restart: unless-stopped
+    networks:
+      - leadforge_net
+
+  # ── Next.js Frontend (Admin Dashboard + Preview Pages) ───
+  frontend:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    environment:
+      - BACKEND_INTERNAL_URL=http://api:8000   # Internal Docker hostname — no internet hop
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"             # Exposed directly for local dev; Nginx proxies in prod
+    restart: unless-stopped
+    networks:
+      - leadforge_net
+
+  # ── PostgreSQL ────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-leadforge}
+      POSTGRES_USER:     ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"             # Exposed for local tooling (DBeaver, psql); lock down in prod
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-leadforge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - leadforge_net
+
+  # ── Redis (Task Queue + Result Backend) ───────────────────
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"             # Lock down in prod
+    restart: unless-stopped
+    networks:
+      - leadforge_net
+
+  # ── Flower — Celery Task Monitor ──────────────────────────
+  flower:
+    image: mher/flower:2.0.0
+    command: >
+      celery
+      --broker=redis://redis:6379/0
+      flower
+      --port=5555
+      --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
+    ports:
+      - "5555:5555"             # Guarded by basic auth + UFW
+    environment:
+      - FLOWER_BASIC_AUTH=${FLOWER_USER}:${FLOWER_PASSWORD}
+    depends_on:
+      - redis
+      - worker
+    restart: unless-stopped
+    networks:
+      - leadforge_net
+
+  # ── Certbot (SSL — run once then comment out) ─────────────
+  # certbot:
+  #   image: certbot/certbot
+  #   volumes:
+  #     - certbot_certs:/etc/letsencrypt
+  #     - certbot_www:/var/www/certbot
+  #   command: >
+  #     certonly --webroot --webroot-path=/var/www/certbot
+  #     --email you@yourdomain.com --agree-tos --no-eff-email
+  #     -d yourdomain.com -d api.yourdomain.com -d preview.yourdomain.com
+
+volumes:
+  pg_data:
+  redis_data:
+  certbot_certs:
+  certbot_www:
+
+networks:
+  leadforge_net:
+    driver: bridge

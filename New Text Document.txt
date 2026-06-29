@@ -1,0 +1,161 @@
+I can see your .ssh folder only has known_hosts — your OCI key must be elsewhere. You'll need to locate it. Here is the complete, exact guide for your situation:
+
+Step 1 — Locate Your OCI Private Key
+Since you successfully SSH'd before, your key file exists somewhere on your machine. In PowerShell:
+
+powershell
+# Find all .pem and private key files on your system
+Get-ChildItem -Path "C:\Users\Admin" -Recurse -Include "*.pem","*.ppk","id_rsa","id_ed25519" -ErrorAction SilentlyContinue | Select-Object FullName
+Run that and note the full path — you'll use it as YOUR_KEY_PATH in every command below.
+
+Step 4 — Initial Server Setup (Run on VPS)
+SSH in first:
+
+powershell
+# PowerShell on your Windows machine
+ssh -i "YOUR_KEY_PATH" ubuntu@84.8.102.112
+Then run all of these in sequence on the VPS:
+
+bash
+# ── 1. Update system ──────────────────────────────────────────
+sudo apt-get update && sudo apt-get upgrade -y
+# ── 2. UFW firewall ───────────────────────────────────────────
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw --force enable
+# ── 3. Oracle Cloud iptables fix (CRITICAL — Oracle ships Ubuntu
+#    with iptables rules that block ports 80/443 even after you
+#    open the OCI Security List. This is the #1 Oracle gotcha) ──
+sudo apt-get install -y iptables-persistent
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80  -j ACCEPT
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+sudo netfilter-persistent save
+# ── 4. Install Docker (handles ARM64 automatically) ───────────
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker ubuntu
+# Apply group change without re-login
+newgrp docker
+# ── 5. Verify Docker works ────────────────────────────────────
+docker run --rm hello-world
+# Expected: "Hello from Docker!"
+# ── 6. Install Git ────────────────────────────────────────────
+sudo apt-get install -y git
+git --version
+Leave this SSH session open. You'll come back to it after the code transfer.
+
+Step 5 — Transfer Code (Direct SCP — No GitHub Needed)
+Open a new PowerShell window on your Windows machine for these commands.
+
+5A — Create a clean deployment archive
+Windows 10/11 has tar built-in. This creates an archive that excludes node_modules, .next, __pycache__, and .git (which are all either huge or environment-specific):
+
+powershell
+# Navigate to the PARENT directory of your project
+cd "C:\Users\Admin\Desktop\projects"
+# Create deployment archive (Windows tar supports --exclude)
+tar `
+  --exclude="Freelace finder\dashboard\node_modules" `
+  --exclude="Freelace finder\dashboard\.next" `
+  --exclude="Freelace finder\dashboard\.git" `
+  --exclude="Freelace finder\Create design prototype" `
+  --exclude="Freelace finder\design-system" `
+  --exclude="Freelace finder\image.png" `
+  --exclude="Freelace finder\Backend_Agentic_AI_Engine_Roadmap.md" `
+  --exclude="Freelace finder\new_plan.md" `
+  --exclude="Freelace finder\.agent" `
+  --exclude="Freelace finder\backend\__pycache__" `
+  -czf leadforge-deploy.tar.gz "Freelace finder"
+# Verify the archive (should be 5–30 MB, NOT 300+ MB)
+(Get-Item leadforge-deploy.tar.gz).Length / 1MB
+5B — Transfer archive to VPS
+powershell
+# Still in C:\Users\Admin\Desktop\projects\
+scp -i "YOUR_KEY_PATH" leadforge-deploy.tar.gz ubuntu@84.8.102.112:/home/ubuntu/
+Expected output: a progress bar showing the upload. Takes 30–90 seconds depending on your upload speed.
+
+5C — Extract on VPS
+Back in your SSH session on the VPS:
+
+bash
+# Extract archive
+cd /home/ubuntu
+tar -xzf leadforge-deploy.tar.gz
+# Rename to remove the space (critical for scripting)
+mv "Freelace finder" leadforge
+# Verify structure
+ls -la leadforge/
+# Expected: backend/  dashboard/  nginx/  docker-compose.yml  .env  .env.example  .gitignore
+ls -la leadforge/backend/
+# Expected: app/  alembic/  Dockerfile  requirements.txt  .env  docker-compose.yml
+ls -la leadforge/dashboard/
+# Expected: app/  components/  lib/  Dockerfile  next.config.ts  package.json
+# (no node_modules — correct, Docker will install them during build)
+Step 5D — Configure Environment Files
+bash
+cd /home/ubuntu/leadforge
+# ── Root .env (postgres credentials + frontend URL) ───────────
+# The file already exists from the archive — just update PREVIEW_BASE_URL
+nano .env
+In nano, verify/update these values:
+
+POSTGRES_PASSWORD=DbPass!2026        ← keep as-is or change
+NEXT_PUBLIC_API_URL=http://84.8.102.112:8000  ← use IP for now, update after DuckDNS
+Save: Ctrl+O → Enter → Ctrl+X
+
+bash
+# ── Backend .env (API keys) ───────────────────────────────────
+# This already exists from the archive with all your API keys
+nano backend/.env
+Update ONLY this one line for now:
+
+PREVIEW_BASE_URL=http://84.8.102.112   ← use IP for now, update after DuckDNS
+FRONTEND_ORIGIN=http://84.8.102.112
+Save and exit.
+
+Step 5E — Run Migrations + Launch
+bash
+cd /home/ubuntu/leadforge
+# Start only postgres first (needs to be healthy before migrations)
+docker compose up -d postgres redis
+echo "Waiting for postgres to be ready..."
+sleep 10
+# Check postgres is healthy
+docker compose ps postgres
+# Status column should show "healthy"
+# Run Alembic migrations
+docker compose run --rm api alembic upgrade head
+# Expected: "INFO  [alembic.runtime.migration] Running upgrade -> a1b2c3d4e5f6..."
+# Start ALL services
+docker compose up -d --build
+# This takes 3–8 minutes on first run (builds frontend + installs Playwright)
+# Watch build progress
+docker compose logs -f --tail=50
+# Press Ctrl+C when you see all services stable
+Step 5F — Verify Everything Is Running
+bash
+# All 6 services should show "Up"
+docker compose ps
+# Test API health from inside the VPS
+curl http://localhost:8000/docs
+# Expected: HTML response (FastAPI Swagger UI)
+# Test frontend from inside the VPS
+curl http://localhost:3000
+# Expected: HTML response
+# Test Nginx routing from inside the VPS
+curl http://localhost/
+# Expected: HTML response (admin dashboard)
+Test from your Windows browser:
+
+http://84.8.102.112/          → Admin dashboard
+http://84.8.102.112/api/docs  → FastAPI Swagger
+If the browser can't reach it, the OCI iptables fix in Step 4 needs to be verified — run sudo iptables -L INPUT -n | grep 80 and confirm ACCEPT rules exist.
+
+What's Next After This Works
+Once you confirm the browser tests pass, the next steps are:
+
+DuckDNS — create subdomain → point to 84.8.102.112 (5 min)
+Certbot — issue SSL cert for your DuckDNS domain (5 min)
+Uncomment Nginx HTTPS blocks — activate HTTPS (2 min)
+Update PREVIEW_BASE_URL to your DuckDNS URL (1 min)
+Run Step 4 commands now, then let me know the output of docker compose ps and the browser test result — I'll generate the DuckDNS + SSL steps immediately.

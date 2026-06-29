@@ -1,0 +1,49 @@
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Environment ──────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+
+# ── Virtual Environments ─────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── IDE ──────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Testing ──────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# ── Docker ───────────────────────────────────────────────────
+.docker/
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Alembic ──────────────────────────────────────────────────
+# Keep: alembic/env.py, alembic/versions/*.py
+# Nothing to gitignore here
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

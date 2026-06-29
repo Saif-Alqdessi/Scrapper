@@ -1,0 +1,48 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths: [backend/**]
+
+env:
+  PROJECT_ID: your-gcp-project-id
+  SERVICE:    leadforge-api
+  REGION:     us-central1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region:  ${{ env.REGION }}
+          source:  ./backend
+          env_vars: |
+            APP_ENV=production
+            CLOUD_RUN_URL=https://${{ env.SERVICE }}-xxxx-uc.a.run.app
+          secrets: |
+            APIFY_API_TOKEN=apify-token:latest
+            GROQ_API_KEY=groq-key:latest
+            POSTGRES_HOST=pg-host:latest
+            POSTGRES_PASSWORD=pg-password:latest
+            APP_SECRET_KEY=app-secret:latest
+          flags: >
+            --min-instances=0
+            --max-instances=10
+            --memory=512Mi
+            --cpu=1
+            --timeout=300
+            --concurrency=80

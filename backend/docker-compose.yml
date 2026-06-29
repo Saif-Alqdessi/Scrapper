@@ -1,0 +1,46 @@
+version: '3.9'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    volumes:
+      - .:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - leadforge_net
+
+
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: leadforge
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d leadforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - leadforge_net
+
+
+
+volumes:
+  pg_data:
+
+networks:
+  leadforge_net:
+    driver: bridge
