@@ -133,17 +133,13 @@ def get_agent_graph():
 async def run_lead_through_agents(lead_id: str) -> dict:
     """
     Loads the lead from DB, runs the full LangGraph pipeline, returns final state.
-    Called by the run_ai_pipeline Celery task (inside asyncio.run()).
-
-    Uses make_task_engine() — a fresh SQLAlchemy engine bound to the current
-    asyncio.run() event loop — to avoid 'Future attached to a different loop'.
+    Called by process_lead (via BackgroundTasks or webhook).
     """
-    from app.database import make_task_engine
+    from app.database import AsyncSessionLocal
     from app.models.lead import Lead, LeadStatus
 
     # ── Load lead from DB ─────────────────────────────────────────────────────
-    async with make_task_engine() as SessionLocal:
-        async with SessionLocal() as db:
+    async with AsyncSessionLocal() as db:
             lead_obj = await db.get(Lead, lead_id)
             if not lead_obj:
                 log.error("run_lead_through_agents: lead not found", extra={"lead_id": lead_id})

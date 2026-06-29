@@ -11,7 +11,7 @@ import uuid
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,10 +76,11 @@ async def get_lead(
 )
 async def trigger_ai_pipeline(
     lead_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     db:      AsyncSession = Depends(get_db),
 ) -> dict:
     """
-    Enqueues the AI pipeline Celery task for a specific lead.
+    Enqueues the AI pipeline task for a specific lead in the background.
     Useful for re-processing a lead after an agent failure.
     """
     lead = await db.get(Lead, lead_id)
@@ -87,13 +88,13 @@ async def trigger_ai_pipeline(
         raise HTTPException(status_code=404, detail="Lead not found")
 
     try:
-        from app.workers.tasks import run_ai_pipeline
-        run_ai_pipeline.apply_async(args=[str(lead_id)])
+        from app.services.pipeline_runner import process_lead
+        background_tasks.add_task(process_lead, lead, db)
     except Exception as exc:
         log.warning("Could not enqueue AI task for lead %s: %s", lead_id, exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Task queue unavailable — Celery broker may be down.",
+            detail="Task queue unavailable.",
         )
 
     log.info("AI pipeline re-triggered", extra={"lead_id": str(lead_id)})

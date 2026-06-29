@@ -54,53 +54,7 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
             raise
 
 
-# ── Context Manager (for Celery tasks outside FastAPI) ────────────────────────
-def get_async_session() -> AsyncSessionLocal:  # type: ignore[valid-type]
-    """
-    Returns the session factory directly, for use as an async context manager
-    inside Celery tasks (which run outside FastAPI's DI system).
 
-    Usage:
-        async with get_async_session() as db:
-            ...
-    """
-    return AsyncSessionLocal()
-
-
-@asynccontextmanager
-async def make_task_engine() -> AsyncGenerator[async_sessionmaker, None]:
-    """
-    Creates a FRESH SQLAlchemy async engine bound to the CURRENT event loop.
-
-    Must be used inside Celery tasks that run in their own event loop
-    (created by asyncio.run() or asyncio.new_event_loop()).  Using the
-    module-level `engine` / `AsyncSessionLocal` from a different loop
-    causes: 'Future attached to a different loop'.
-
-    Usage inside a Celery task:
-        async def _task_body():
-            async with make_task_engine() as SessionLocal:
-                async with SessionLocal() as db:
-                    ...
-    """
-    task_engine = create_async_engine(
-        settings.DATABASE_URL,
-        echo=False,          # quiet in worker logs
-        pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
-    )
-    task_session_factory = async_sessionmaker(
-        bind=task_engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autoflush=False,
-        autocommit=False,
-    )
-    try:
-        yield task_session_factory
-    finally:
-        await task_engine.dispose()
 
 
 # ── Table Creation ────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.campaign import Campaign, CampaignStatus
 from app.models.lead import Lead, LeadStatus
+from app.config import settings
 from app.schemas.campaign import CampaignCreate, CampaignResponse, CampaignStatusResponse
 from app.services.scraper.apify_async import start_apify_run, abort_apify_run
 
@@ -63,7 +64,13 @@ async def create_campaign(
 
     # Start Apify run asynchronously
     try:
-        run_id = await start_apify_run(campaign.niche, campaign.location)
+        webhook_url = f"{settings.CLOUD_RUN_URL}/api/v1/webhooks/apify"
+        run_id = await start_apify_run(
+            niche=campaign.niche,
+            location=campaign.location,
+            campaign_id=str(campaign.id),
+            webhook_url=webhook_url,
+        )
         campaign.apify_run_id = run_id
         await db.commit()
     except Exception as exc:
@@ -214,7 +221,13 @@ async def retry_campaign(
 
     # Start a fresh Apify run
     try:
-        run_id = await start_apify_run(campaign.niche, campaign.location)
+        webhook_url = f"{settings.CLOUD_RUN_URL}/api/v1/webhooks/apify"
+        run_id = await start_apify_run(
+            niche=campaign.niche,
+            location=campaign.location,
+            campaign_id=str(campaign.id),
+            webhook_url=webhook_url,
+        )
         campaign.apify_run_id = run_id
         await db.commit()
         log.info("Campaign retry started via Apify", extra={"campaign_id": str(campaign_id), "apify_run_id": run_id})

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
     # ── Application ──────────────────────────────────────────
     APP_ENV: str = "development"
+    CLOUD_RUN_URL: str = "https://leadforge-api-xxxx-uc.a.run.app"
+    APIFY_WEBHOOK_SECRET: str = ""
     APP_SECRET_KEY: str = "change-me"
     API_KEY: str = "change-me-dashboard-api-key"
     FRONTEND_ORIGIN: str = "http://localhost:3000"
