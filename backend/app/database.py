@@ -19,7 +19,16 @@ import re
 
 log = logging.getLogger(__name__)
 
-db_url = settings.DATABASE_URL
+import os
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    DATABASE_URL = "postgresql+asyncpg://neondb_owner:npg_WS1djRN8TcBD@ep-purple-dew-aslco8b5.c-4.eu-central-1.aws.neon.tech/neondb?ssl=require"
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+db_url = DATABASE_URL
+
 if not db_url or "change-me" in db_url:
     log.critical("CRITICAL: DATABASE_URL environment variable is missing or empty!")
 else:
@@ -67,8 +76,11 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
             raise
 
 
-
-
-
-
-
+# ── Table Creation ────────────────────────────────────────────────────────────
+async def create_tables() -> None:
+    """
+    Creates all tables on startup (development convenience).
+    """
+    async with engine.begin() as conn:
+        import app.models  # noqa: F401
+        await conn.run_sync(Base.metadata.create_all)
