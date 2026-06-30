@@ -38,12 +38,17 @@ class Settings(BaseSettings):
     @property
     def DATABASE_URL(self) -> str:
         """Async URL for SQLAlchemy (asyncpg driver)."""
-        if self.DATABASE_URL_OVERRIDE:
-            if self.DATABASE_URL_OVERRIDE.startswith("postgres://"):
+        import os
+        # 1. Check override
+        # 2. Check standard DATABASE_URL (Render injects this)
+        raw_url = self.DATABASE_URL_OVERRIDE or os.getenv("DATABASE_URL")
+        
+        if raw_url:
+            if raw_url.startswith("postgres://"):
                 # SQLAlchemy 2.0+ requires postgresql://
-                url = self.DATABASE_URL_OVERRIDE.replace("postgres://", "postgresql://", 1)
+                url = raw_url.replace("postgres://", "postgresql://", 1)
             else:
-                url = self.DATABASE_URL_OVERRIDE
+                url = raw_url
             # Ensure asyncpg is used
             if "postgresql://" in url:
                 url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -57,11 +62,14 @@ class Settings(BaseSettings):
     @property
     def DATABASE_URL_SYNC(self) -> str:
         """Sync URL for Alembic migrations (psycopg2 driver)."""
-        if self.DATABASE_URL_OVERRIDE:
-            if self.DATABASE_URL_OVERRIDE.startswith("postgres://"):
-                url = self.DATABASE_URL_OVERRIDE.replace("postgres://", "postgresql://", 1)
+        import os
+        raw_url = self.DATABASE_URL_OVERRIDE or os.getenv("DATABASE_URL")
+        
+        if raw_url:
+            if raw_url.startswith("postgres://"):
+                url = raw_url.replace("postgres://", "postgresql://", 1)
             else:
-                url = self.DATABASE_URL_OVERRIDE
+                url = raw_url
             # Ensure psycopg2 is used
             if "postgresql://" in url:
                 url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
@@ -72,30 +80,11 @@ class Settings(BaseSettings):
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
 
-    # ── Redis / Celery ────────────────────────────────────────
-
-
-    # ── Google Cloud / AI ─────────────────────────────────────────────
+    # ── Google Cloud ──────────────────────────────────────────────────
     GOOGLE_PLACES_API_KEY: str = ""
-    GOOGLE_AI_API_KEY: str = ""
-
-    # ── Groq (Analyst + Copywriter EN + Copywriter AR — Llama 3.3 70B) ──────────
-    GROQ_API_KEY: str = ""
 
     # ── Apify ─────────────────────────────────────────────────────────
     APIFY_API_TOKEN: str = ""
-
-    # ── LangSmith (Optional) ──────────────────────────────────
-    LANGCHAIN_TRACING_V2: bool = False
-    LANGCHAIN_API_KEY: str = ""
-    LANGCHAIN_PROJECT: str = "leadforge"
-
-    # ── Model Allocation (Phase 5 — Google Unified Stack) ─────
-    # High-quality copywriting — English & Arabic
-    GEMINI_COPY_MODEL: str = "gemini-1.5-pro"
-    # Speed-optimised analysis & JSON validation
-    GEMINI_ANALYST_MODEL: str = "gemini-1.5-flash"
-    GEMINI_VALIDATOR_MODEL: str = "gemini-1.5-flash"
 
 
 @lru_cache

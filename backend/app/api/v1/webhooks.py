@@ -22,7 +22,6 @@ from app.schemas.lead import RawLeadData
 from app.services.scraper.apify_scraper import _map_item, _validate_token
 from app.services.scraper.filter_engine import LeadFilterEngine
 from app.services.utils import generate_slug
-from app.services.pipeline_runner import process_lead
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -73,7 +72,7 @@ async def apify_webhook(
         return {"status": "ignored", "reason": "unknown run_id"}
 
     # ── Handle failure ───────────────────────────────────────────────────────
-    if payload.status != "ACTOR.RUN.SUCCEEDED":
+    if payload.status.strip().upper() != "SUCCEEDED":
         campaign.status = CampaignStatus.FAILED
         await db.commit()
         log.error("Apify run failed: run_id=%s status=%s", payload.runId, payload.status)
@@ -126,14 +125,12 @@ async def apify_webhook(
             website_url=raw.website_url,
             has_website=raw.has_website,
             maps_url=raw.maps_url,
-            status=LeadStatus.AI_PROCESSING,
+            status=LeadStatus.NEW,
         )
         db.add(lead)
         await db.commit()
         await db.refresh(lead)
 
-        # Direct async call — no Celery, no queue
-        await process_lead(lead, db)
         saved += 1
 
     campaign.status = CampaignStatus.DONE
