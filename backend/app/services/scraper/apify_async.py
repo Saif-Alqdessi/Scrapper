@@ -50,15 +50,13 @@ async def _attach_webhook(
     The payloadTemplate injects runId and eventType from Apify's context.
     """
     payload_template = (
-        '{"runId":"{{resource.id}}",'
-        '"status":"{{eventType}}",'
-        f'"campaignId":"{campaign_id}"}}'
+        '{"runId":"' + run_id + '",'
+        '"status":"SUCCEEDED",'
+        '"campaignId":"' + campaign_id + '"}'
     )
     webhook_body = {
         "eventTypes": [
             "ACTOR.RUN.SUCCEEDED",
-            "ACTOR.RUN.FAILED",
-            "ACTOR.RUN.ABORTED",
         ],
         "requestUrl": webhook_url,
         "payloadTemplate": payload_template,
@@ -95,7 +93,7 @@ async def start_apify_run(
     """
     token = _validate_token()
     query = f"{niche} in {location}"
-    actor_input = _build_payload(query, max_results)
+    actor_input = _build_payload(query, max_results, location)
 
     # ── Step 1: Start the run ─────────────────────────────────────────────────
     run_id = await _create_run(token, actor_input)

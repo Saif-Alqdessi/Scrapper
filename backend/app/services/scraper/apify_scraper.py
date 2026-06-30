@@ -34,12 +34,15 @@ log = logging.getLogger(__name__)
 # Private helpers
 # ---------------------------------------------------------------------------
 
-def _build_payload(query: str, max_results: int) -> dict:
+def _build_payload(query: str, max_results: int, location: str = "") -> dict:
     """Return the Apify actor input payload for a single search query."""
+    country_code = "jo" if any(x in location.lower() for x in ["jordan", "amman", "zarqa", "irbid"]) else "us"
     return {
         "searchStringsArray": [query],
         "maxCrawledPlacesPerSearch": max_results,
         "language": _DEFAULT_LANGUAGE,
+        "countryCode": country_code,
+        "zoom": 12,
         "includeReviews": True,
         "maxReviews": 3,
     }
@@ -109,13 +112,13 @@ def _validate_token() -> str:
     return token
 
 
-async def _fetch_items(query: str, max_results: int, token: str) -> list[dict]:
+async def _fetch_items(query: str, max_results: int, token: str, location: str) -> list[dict]:
     """
     POST to Apify's synchronous run endpoint and return the raw item list.
 
     Raises httpx.HTTPStatusError or httpx.RequestError on transport failures.
     """
-    payload = _build_payload(query, max_results)
+    payload = _build_payload(query, max_results, location)
     params = {"token": token, "timeout": _APIFY_TIMEOUT_PARAM}
 
     async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT) as client:
@@ -154,7 +157,7 @@ class ApifyMapsScraper:
         log.info("Apify search started: query=%r max_results=%d", query, max_results)
 
         try:
-            items: list[dict] = await _fetch_items(query, max_results, token)
+            items: list[dict] = await _fetch_items(query, max_results, token, location)
         except httpx.HTTPStatusError as exc:
             log.error(
                 "Apify HTTP error: status=%d url=%s",
