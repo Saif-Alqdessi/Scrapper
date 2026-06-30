@@ -14,9 +14,22 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
 
+import logging
+import re
+
+log = logging.getLogger(__name__)
+
+db_url = settings.DATABASE_URL
+if not db_url or "change-me" in db_url:
+    log.critical("CRITICAL: DATABASE_URL environment variable is missing or empty!")
+else:
+    # Mask password: replace everything between the colon after the username and the @ symbol with ***
+    masked_url = re.sub(r":([^:@/]+)@", ":***@", db_url)
+    log.info(f"Loaded DATABASE_URL -> {masked_url}")
+
 # ── Engine ────────────────────────────────────────────────────────────────────
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    db_url,
     echo=(settings.APP_ENV == "development"),  # Log SQL in dev only
     pool_pre_ping=True,                        # Detect stale connections
     pool_size=10,
@@ -57,27 +70,5 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
 
 
 
-# ── Table Creation ────────────────────────────────────────────────────────────
-async def create_tables() -> None:
-    """
-    Creates all tables on startup (development convenience).
-    In production, use Alembic migrations instead.
 
-    Also runs idempotent ALTER TYPE statements to keep the PostgreSQL enum
-    in sync with the Python CampaignStatus enum (e.g. adding CANCELLED).
-    """
-    from sqlalchemy import text
-    async with engine.begin() as conn:
-        # Import models so they register with Base.metadata
-        import app.models  # noqa: F401
-        await conn.run_sync(Base.metadata.create_all)
-
-        # Ensure CANCELLED exists in the PostgreSQL enum.
-        # IMPORTANT: SQLAlchemy SAEnum stores the Python member .name (UPPERCASE),
-        # not .value ("cancelled"). PostgreSQL is case-sensitive for enum values,
-        # so the ALTER must use 'CANCELLED' to match what SQLAlchemy sends.
-        # IF NOT EXISTS makes this idempotent — safe on every container restart.
-        await conn.execute(
-            text("ALTER TYPE campaignstatus ADD VALUE IF NOT EXISTS 'CANCELLED'")
-        )
 
