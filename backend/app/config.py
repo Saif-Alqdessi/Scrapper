@@ -31,10 +31,24 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "leadforge"
     POSTGRES_USER: str = "admin"
     POSTGRES_PASSWORD: str = "change-me"
+    
+    # Optional direct URL override (useful for Neon/Render)
+    DATABASE_URL_OVERRIDE: str | None = None
 
     @property
     def DATABASE_URL(self) -> str:
         """Async URL for SQLAlchemy (asyncpg driver)."""
+        if self.DATABASE_URL_OVERRIDE:
+            if self.DATABASE_URL_OVERRIDE.startswith("postgres://"):
+                # SQLAlchemy 2.0+ requires postgresql://
+                url = self.DATABASE_URL_OVERRIDE.replace("postgres://", "postgresql://", 1)
+            else:
+                url = self.DATABASE_URL_OVERRIDE
+            # Ensure asyncpg is used
+            if "postgresql://" in url:
+                url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return url
+
         return (
             f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
@@ -43,6 +57,16 @@ class Settings(BaseSettings):
     @property
     def DATABASE_URL_SYNC(self) -> str:
         """Sync URL for Alembic migrations (psycopg2 driver)."""
+        if self.DATABASE_URL_OVERRIDE:
+            if self.DATABASE_URL_OVERRIDE.startswith("postgres://"):
+                url = self.DATABASE_URL_OVERRIDE.replace("postgres://", "postgresql://", 1)
+            else:
+                url = self.DATABASE_URL_OVERRIDE
+            # Ensure psycopg2 is used
+            if "postgresql://" in url:
+                url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+            return url
+
         return (
             f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"

@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: leadforge-api
+    env: docker
+    region: ohio
+    plan: free
+    dockerContext: .
+    dockerfilePath: ./backend/Dockerfile
+    envVars:
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: DATABASE_URL_OVERRIDE
+        sync: false
+      - key: APP_SECRET_KEY
+        sync: false
+      - key: CLOUD_RUN_URL
+        sync: false

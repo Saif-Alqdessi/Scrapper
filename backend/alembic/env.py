@@ -55,13 +55,24 @@ def do_run_migrations(connection: Connection) -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode (requires DB connection)."""
-    connectable = config.attributes.get("connection", None)
-    if connectable is None:
-        from sqlalchemy import create_engine
-        connectable = create_engine(
-            config.get_main_option("sqlalchemy.url"),
-            poolclass=pool.NullPool,
-        )
+    import os
+    from sqlalchemy import create_engine
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        db_url = config.get_main_option("sqlalchemy.url")
+
+    if db_url:
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+        elif db_url.startswith("postgresql://"):
+            db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+    connectable = create_engine(
+        db_url,
+        poolclass=pool.NullPool,
+    )
+
     with connectable.connect() as connection:
         do_run_migrations(connection)
 

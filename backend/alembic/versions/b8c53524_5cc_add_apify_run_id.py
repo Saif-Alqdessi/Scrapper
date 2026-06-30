@@ -1,10 +1,10 @@
-﻿\"\"\"add apify_run_id
+"""add apify_run_id
 
-Revision ID: b8c53524-5cc
+Revision ID: b8c53524_5cc
 Revises: 
 Create Date: 2026-06-29
 
-\"\"\"
+"""
 from typing import Sequence, Union
 
 from alembic import op
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'b8c53524-5cc'
-down_revision: Union[str, None] = None
+revision: str = 'b8c53524_5cc'
+down_revision: Union[str, None] = 'a1b2c3d4e5f6'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
