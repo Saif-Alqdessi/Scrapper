@@ -15,7 +15,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.database import create_tables
 
 log = structlog.get_logger(__name__)
 
@@ -25,8 +24,6 @@ log = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI):
     """Run startup tasks before yielding, then shutdown tasks after."""
     log.info("LeadForge API starting up…", env=settings.APP_ENV)
-    await create_tables()
-    log.info("Database tables verified ✅")
     yield
     log.info("LeadForge API shutting down…")
 
