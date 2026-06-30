@@ -3,6 +3,8 @@ app/services/scraper/apify_async.py
 Starts an Apify actor run asynchronously (fire-and-forget with webhook).
 Does NOT wait for the run to complete — Apify calls us back via webhook.
 """
+import base64
+import json
 import logging
 import httpx
 from app.config import settings
@@ -26,12 +28,19 @@ async def start_apify_run(
     """
     Fire an async Apify actor run.
     Returns the Apify run_id immediately (Apify will call webhook_url when done).
+
+    Webhooks are registered via the `webhooks` query param (base64-encoded JSON),
+    NOT in the request body — Apify silently ignores body-level webhook dicts.
     """
     token = _validate_token()
     query = f"{niche} in {location}"
-    payload = {
-        **_build_payload(query, max_results),
-        "webhooks": [{
+
+    # ── Actor input (body) ────────────────────────────────────────────────────
+    actor_input = _build_payload(query, max_results)
+
+    # ── Webhook registration (query param, base64-encoded JSON array) ─────────
+    webhook_definition = [
+        {
             "eventTypes": [
                 "ACTOR.RUN.SUCCEEDED",
                 "ACTOR.RUN.FAILED",
@@ -43,14 +52,22 @@ async def start_apify_run(
                 '"status":"{{eventType}}",'
                 f'"campaignId":"{campaign_id}"}}'
             ),
-        }],
-    }
+        }
+    ]
+    webhooks_b64 = base64.b64encode(
+        json.dumps(webhook_definition).encode()
+    ).decode()
+
+    log.info(
+        "Registering Apify webhook: url=%s campaign_id=%s",
+        webhook_url, campaign_id,
+    )
 
     async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT) as client:
         response = await client.post(
             _APIFY_RUNS_URL,
-            params={"token": token},
-            json=payload,
+            params={"token": token, "webhooks": webhooks_b64},
+            json=actor_input,
         )
         response.raise_for_status()
 
