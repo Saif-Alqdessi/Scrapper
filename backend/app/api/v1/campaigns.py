@@ -62,11 +62,11 @@ async def create_campaign(
     await db.refresh(campaign)
 
     log.info(
-        "Campaign created — enqueueing scrape task",
+        "Campaign created — starting Apify run",
         extra={"campaign_id": str(campaign.id), "niche": campaign.niche},
     )
 
-    # Start Apify run asynchronously
+    # Start Apify run — must await so run_id is returned before we respond
     try:
         webhook_url = f"{settings.CLOUD_RUN_URL}/api/v1/webhooks/apify"
         run_id = await start_apify_run(
@@ -77,8 +77,16 @@ async def create_campaign(
         )
         campaign.apify_run_id = run_id
         await db.commit()
+        await db.refresh(campaign)  # sync ORM object before Pydantic serializes
+        log.info("Apify run started", extra={"campaign_id": str(campaign.id), "apify_run_id": run_id})
     except Exception as exc:
-        log.error("Could not start Apify run: %s", exc)
+        log.error("Could not start Apify run: %s", exc, exc_info=True)
+        campaign.status = CampaignStatus.FAILED
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Apify run failed to start: {exc}",
+        )
 
     return campaign
 
@@ -236,7 +244,13 @@ async def retry_campaign(
         await db.commit()
         log.info("Campaign retry started via Apify", extra={"campaign_id": str(campaign_id), "apify_run_id": run_id})
     except Exception as exc:
-        log.error("Could not start Apify run on retry: %s", exc)
+        log.error("Could not start Apify run on retry: %s", exc, exc_info=True)
+        campaign.status = CampaignStatus.FAILED
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Apify run failed to start: {exc}",
+        )
 
     return campaign
 
