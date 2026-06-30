@@ -50,7 +50,7 @@ async def _attach_webhook(
     The payloadTemplate injects runId and eventType from Apify's context.
     """
     payload_template = (
-        '{"runId":"{{runId}}",'
+        '{"runId":"{{resource.id}}",'
         '"status":"{{eventType}}",'
         f'"campaignId":"{campaign_id}"}}'
     )
