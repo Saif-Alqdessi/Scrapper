@@ -1,12 +1,14 @@
 """
 app/api/v1/campaigns.py
-Campaign endpoints — Phase 3 implementation.
+Campaign endpoints — serverless Apify webhook architecture.
 
-POST /                   → Create campaign, enqueue scrape job → 202
+POST /                   → Create campaign, fire async Apify run → 202
 GET  /{id}/status        → Poll campaign progress (dashboard polling every 3s)
 GET  /                   → List all campaigns (dashboard overview)
 GET  /{id}               → Campaign detail
-DELETE /{id}             → Cancel / delete campaign
+POST /{id}/cancel        → Abort Apify run + mark CANCELLED
+POST /{id}/retry         → Re-fire Apify run for FAILED/CANCELLED campaigns
+DELETE /{id}             → Delete campaign and all its leads
 """
 import uuid
 import logging
@@ -41,11 +43,13 @@ async def create_campaign(
     db: AsyncSession = Depends(get_db),
 ) -> Campaign:
     """
-    Creates a campaign record and immediately enqueues the Celery scrape task.
+    Creates a campaign record and fires an async Apify scrape run (non-blocking).
     Returns the campaign with status=PENDING; the frontend polls /status.
 
-    The Celery task transitions the status through:
+    The serverless webhook flow transitions status through:
       PENDING → SCRAPING → AI_RUNNING → DONE (or FAILED)
+
+    Apify calls POST /api/v1/webhooks/apify when the scrape completes.
     """
     campaign = Campaign(
         niche    = payload.niche,
@@ -158,7 +162,7 @@ async def cancel_campaign(
     db: AsyncSession = Depends(get_db),
 ) -> Campaign:
     """
-    Terminates the Celery task for a running campaign and marks it CANCELLED.
+    Aborts the live Apify run (if any) and marks the campaign CANCELLED.
     Only valid when campaign is PENDING, SCRAPING, or AI_RUNNING.
     """
     campaign = await db.get(Campaign, campaign_id)
@@ -200,8 +204,8 @@ async def retry_campaign(
     db: AsyncSession = Depends(get_db),
 ) -> Campaign:
     """
-    Re-enqueues the scrape pipeline for a FAILED or CANCELLED campaign.
-    Resets status to PENDING and fires a new Celery task.
+    Re-fires a fresh Apify scrape run for a FAILED or CANCELLED campaign.
+    Resets status to PENDING and starts a new Apify run with the same parameters.
     """
     campaign = await db.get(Campaign, campaign_id)
     if not campaign:

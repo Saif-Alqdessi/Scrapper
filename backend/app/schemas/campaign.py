@@ -18,12 +18,13 @@ class CampaignCreate(BaseModel):
 
 class CampaignResponse(BaseModel):
     """Returned after creating or fetching a campaign."""
-    id:         uuid.UUID
-    niche:      str
-    location:   str
-    language:   str
-    status:     str
-    created_at: datetime
+    id:            uuid.UUID
+    niche:         str
+    location:      str
+    language:      str
+    status:        str
+    apify_run_id:  Optional[str] = None
+    created_at:    datetime
 
     model_config = {"from_attributes": True}
 
