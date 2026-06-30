@@ -20,13 +20,12 @@ from app.schemas.lead import RawLeadData, RawReview
 # Module-level constants
 # ---------------------------------------------------------------------------
 _APIFY_RUN_URL: str = (
-    "https://api.apify.com/v2/acts/apify~google-maps-scraper"
+    "https://api.apify.com/v2/acts/compass~crawler-google-places"
     "/run-sync-get-dataset-items"
 )
 _APIFY_TIMEOUT_PARAM: int = 120          # seconds passed to Apify as query param
 _HTTPX_TIMEOUT: float = 130.0            # slightly longer than Apify's own timeout
 _DEFAULT_LANGUAGE: str = "en"
-_DEFAULT_COUNTRY: str = "US"
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +40,6 @@ def _build_payload(query: str, max_results: int) -> dict:
         "searchStringsArray": [query],
         "maxCrawledPlacesPerSearch": max_results,
         "language": _DEFAULT_LANGUAGE,
-        "countryCode": _DEFAULT_COUNTRY,
         "includeReviews": True,
         "maxReviews": 3,
     }

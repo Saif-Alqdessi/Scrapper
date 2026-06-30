@@ -9,7 +9,7 @@ from app.config import settings
 from app.services.scraper.apify_scraper import _build_payload, _validate_token
 
 _APIFY_RUNS_URL = (
-    "https://api.apify.com/v2/acts/apify~google-maps-scraper/runs"
+    "https://api.apify.com/v2/acts/compass~crawler-google-places/runs"
 )
 _HTTPX_TIMEOUT = 15.0   # Just launching the run — fast
 
@@ -28,8 +28,9 @@ async def start_apify_run(
     Returns the Apify run_id immediately (Apify will call webhook_url when done).
     """
     token = _validate_token()
+    query = f"{niche} in {location}"
     payload = {
-        **_build_payload(niche, location, max_results),
+        **_build_payload(query, max_results),
         "webhooks": [{
             "eventTypes": [
                 "ACTOR.RUN.SUCCEEDED",
