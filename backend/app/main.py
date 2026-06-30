@@ -3,9 +3,10 @@ app/main.py
 FastAPI application entry point — LeadForge Backend.
 
 Architecture:
-  - /api/v1/campaigns  → Create/monitor scraping campaigns
-  - /api/v1/leads      → List, update, and trigger AI for leads
-  - /api/v1/preview    → Serves assembled JSON payloads to Next.js frontend
+  - /api/v1/campaigns      → Create/monitor scraping campaigns
+  - /api/v1/leads          → List, update, and trigger AI for leads
+  - /api/v1/preview        → Serves assembled JSON payloads to Next.js frontend
+  - /api/v1/webhooks/apify → Receives Apify run completion callbacks
 """
 import structlog
 from contextlib import asynccontextmanager
@@ -88,6 +89,7 @@ app.include_router(
 
 app.include_router(
     webhooks.router,
+    prefix="/api/v1/webhooks",
     tags=["webhooks"],
 )
 
