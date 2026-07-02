@@ -6,6 +6,10 @@ services:
     plan: free
     dockerContext: .
     dockerfilePath: ./backend/Dockerfile
+    # Render probes this port to confirm the service is up.
+    # Must match the PORT env var Render injects (default 10000 on free tier).
+    port: 10000
+    healthCheckPath: /health
     envVars:
       - key: APIFY_API_TOKEN
         sync: false

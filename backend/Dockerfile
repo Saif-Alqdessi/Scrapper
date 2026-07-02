@@ -15,5 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Render and Cloud Run use the PORT env var. Shell form allows variable expansion.
-CMD bash -c "gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:${PORT:-8080} --timeout 300"
+# Render injects PORT (default 10000). --preload boots the app before forking
+# workers, cutting cold-start time and preventing port-open timeout on free tier.
+CMD bash -c "gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --workers 1 --preload --bind 0.0.0.0:${PORT:-10000} --timeout 120"
+
