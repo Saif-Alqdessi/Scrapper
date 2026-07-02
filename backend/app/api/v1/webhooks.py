@@ -77,8 +77,9 @@ async def apify_webhook(
         return {"status": "ignored", "reason": "unknown run_id"}
 
     # ── Handle failure ───────────────────────────────────────────────────────
-    # I-3: Apify sends the full event name, e.g. "ACTOR.RUN.SUCCEEDED"
-    if payload.status.strip().upper() != _APIFY_SUCCESS_STATUS:
+    # Accept both the native Apify event name ("ACTOR.RUN.SUCCEEDED") and the
+    # short form ("SUCCEEDED") used by our custom hardcoded webhook payload in apify_async.py
+    if payload.status.strip().upper() not in {"SUCCEEDED", _APIFY_SUCCESS_STATUS}:
         campaign.status = CampaignStatus.FAILED
         await db.commit()
         log.error("Apify run failed: run_id=%s status=%s", payload.runId, payload.status)
