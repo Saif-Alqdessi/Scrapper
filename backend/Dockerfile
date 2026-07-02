@@ -15,10 +15,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8080
-# Cloud Run uses PORT env var; gunicorn reads it automatically
-CMD ["gunicorn", "app.main:app", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--workers", "2", \
-     "--bind", "0.0.0.0:8080", \
-     "--timeout", "300"]
+# Render and Cloud Run use the PORT env var. Shell form allows variable expansion.
+CMD bash -c "gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:${PORT:-8080} --timeout 300"
