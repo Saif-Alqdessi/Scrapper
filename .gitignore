@@ -41,3 +41,5 @@ out/
 *.tmp
 "graphify-out/" 
 graphify-out/ 
+
+.worktrees/
