@@ -115,7 +115,7 @@ async def apify_webhook(
 
         lead = Lead(
             campaign_id=campaign.id,
-            slug=generate_slug(raw.business_name),
+            slug=generate_slug(raw.business_name, campaign.location),
             business_name=raw.business_name,
             google_place_id=raw.google_place_id,
             google_rating=raw.google_rating,
