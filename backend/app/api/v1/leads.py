@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.lead import Lead, LeadStatus
-from app.schemas.lead_api import LeadSummaryResponse, LeadStatusUpdate
+from app.schemas.lead_api import LeadSummaryResponse, LeadStatusUpdate, LeadUpdate
 
 log = logging.getLogger(__name__)
 
@@ -144,4 +144,34 @@ async def update_lead_status(
         "Lead status updated",
         extra={"lead_id": str(lead_id), "new_status": new_status},
     )
+    return lead
+
+
+# ── PATCH /{id} — Update lead details ─────────────────────────────────────────
+
+@router.patch(
+    "/{lead_id}",
+    response_model=LeadSummaryResponse,
+    summary="Update lead details",
+)
+async def update_lead(
+    lead_id: uuid.UUID,
+    body:    LeadUpdate,
+    db:      AsyncSession = Depends(get_db),
+) -> Lead:
+    """
+    Called by the dashboard to manually correct lead details like phone or website.
+    """
+    lead = await db.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    patch_data = body.model_dump(exclude_unset=True)
+    for key, value in patch_data.items():
+        setattr(lead, key, value)
+
+    await db.commit()
+    await db.refresh(lead)
+
+    log.info("Lead updated", extra={"lead_id": str(lead_id), "updates": patch_data})
     return lead

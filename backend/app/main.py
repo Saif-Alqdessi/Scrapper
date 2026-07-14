@@ -68,7 +68,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ── Routers (Phase 3 — fully implemented) ────────────────────────────────────
-from app.api.v1 import campaigns, leads, preview, webhooks
+from app.api.v1 import campaigns, leads, preview, webhooks, stats
+
+app.include_router(
+    stats.router,
+    prefix="/api/v1/stats",
+    tags=["stats"],
+)
 
 app.include_router(
     campaigns.router,

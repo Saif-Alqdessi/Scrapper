@@ -42,3 +42,9 @@ class LeadStatusUpdate(BaseModel):
         ...,
         description="One of: new | ai_processing | ready | outreach_sent | replied | closed | rejected",
     )
+
+class LeadUpdate(BaseModel):
+    """Fields the dashboard operator can correct manually."""
+    phone: str | None = None
+    address: str | None = None
+    website_url: str | None = None
