@@ -48,6 +48,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         settings.FRONTEND_ORIGIN,
+        "https://scrapper-teal.vercel.app",
         "http://localhost:3000",
         "http://localhost:3001",
     ],
